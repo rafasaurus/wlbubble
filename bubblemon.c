@@ -92,13 +92,12 @@ void parse_arguments(int argc, char **argv);
 void draw_from_xpm(char **xpm, unsigned char *whither, unsigned int targetw,
                    unsigned int xpmx, unsigned int xpmy, unsigned int xpmw,
                    unsigned int xpmh, unsigned int color);
-void draw_history(int num, int size, unsigned int *history,
-                  unsigned char *buf);
-void draw_digit(unsigned char * from, unsigned char * whither);
+void draw_history(int num, int size, unsigned int *history, uint32_t *buf);
+void draw_digit(unsigned char *from, uint32_t *whither);
 void draw_string(char *string, int x, int y, int color);
 void draw_cpudigit(int what, unsigned char *whither);
 void draw_cpugauge(int cpu);
-void draw_rgba_pixel(unsigned char * whither, int color, float opacity);
+void draw_rgba_pixel(uint32_t *whither, int color, float opacity);
 void draw_aa_line(float x1,float y1, float x2,float y2, int color);
 void draw_clockhands(void);
 
@@ -110,13 +109,12 @@ void alpha_digitalclock(struct tm * mytime);
 void alpha_date(struct tm * mytime);
 void roll_history(void);
 
-void draw_dtchr(const char letter, unsigned char *where);
+void draw_dtchr(const char letter, uint32_t *where);
+void draw_largedigit(char number, uint32_t *rgbbuf);
 
 int animate_correctly(void);
 void draw_duck(int x, int y, int frame_no, int flipx, int flipy);
 void duck_swimmer(void);
-
-void rgb_to_xrgb(const unsigned char *rgb, uint32_t *xrgb);
 
 BubbleMonData bm;
 
@@ -323,13 +321,6 @@ void print_usage(void) {
            "\nColor values should be specified in hexadecimal (e.g., 0xFF0000 for red)\n");
 }
 
-void rgb_to_xrgb(const unsigned char *rgb, uint32_t *xrgb) {
-    int i;
-    for (i = 0; i < BOX_SIZE * BOX_SIZE; i++) {
-        xrgb[i] = (rgb[i*3] << 16) | (rgb[i*3+1] << 8) | rgb[i*3+2];
-    }
-}
-
 static long get_time_usec(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -508,28 +499,25 @@ int main(int argc, char **argv) {
 #endif
 
         if (wayland_is_visible() && wayland_can_render()) {
-            int xx,yy;
-            unsigned char * from;
+            int xx, yy;
+            uint32_t pixel;
 
-            for (from=bm.rgb_buf,xx=0;xx<BOX_SIZE*3-3;from++,xx++) {
-                from[0]/=4;
-                from[BOX_SIZE*(BOX_SIZE-1)*3+3]=
-                    (255+from[BOX_SIZE*(BOX_SIZE-1)*3+3])/2;
+            for (xx = 0; xx < BOX_SIZE - 1; xx++) {
+                pixel = bm.rgb_buf[xx];
+                bm.rgb_buf[xx] = ((GET_RED(pixel)/4) << 16) | ((GET_GRN(pixel)/4) << 8) | (GET_BLU(pixel)/4);
+                pixel = bm.rgb_buf[(BOX_SIZE-1)*BOX_SIZE + xx + 1];
+                bm.rgb_buf[(BOX_SIZE-1)*BOX_SIZE + xx + 1] = (((255+GET_RED(pixel))/2) << 16) | (((255+GET_GRN(pixel))/2) << 8) | ((255+GET_BLU(pixel))/2);
             }
 
-            for (from=bm.rgb_buf,yy=0;yy<BOX_SIZE-1;yy++,
-                     from+=BOX_SIZE*3) {
-                from[0]/=4; from[1]/=4; from[2]/=4;
-                from[(2*BOX_SIZE-1)*3  ]=
-                    (255+from[(2*BOX_SIZE-1)*3  ])/2;
-                from[(2*BOX_SIZE-1)*3+1]=
-                    (255+from[(2*BOX_SIZE-1)*3+1])/2;
-                from[(2*BOX_SIZE-1)*3+2]=
-                    (255+from[(2*BOX_SIZE-1)*3+2])/2;
+            for (yy = 0; yy < BOX_SIZE - 1; yy++) {
+                pixel = bm.rgb_buf[yy * BOX_SIZE];
+                bm.rgb_buf[yy * BOX_SIZE] = ((GET_RED(pixel)/4) << 16) | ((GET_GRN(pixel)/4) << 8) | (GET_BLU(pixel)/4);
+                pixel = bm.rgb_buf[yy * BOX_SIZE + BOX_SIZE - 1];
+                bm.rgb_buf[yy * BOX_SIZE + BOX_SIZE - 1] = (((255+GET_RED(pixel))/2) << 16) | (((255+GET_GRN(pixel))/2) << 8) | ((255+GET_BLU(pixel))/2);
             }
 
             buffer = wayland_get_buffer();
-            rgb_to_xrgb(bm.rgb_buf, buffer);
+            memcpy(buffer, bm.rgb_buf, BOX_SIZE * BOX_SIZE * sizeof(uint32_t));
             wayland_commit_buffer();
         }
     }
@@ -664,73 +652,74 @@ void draw_watertank(void) {
     unsigned char *bubblebuf_ptr;
 
     for (x = 0; x < BOX_SIZE; x++) {
-        for (y = 0;
-             y < REALY(bm.waterlevels[x]); y++)
-            bm.bubblebuf[y * BOX_SIZE + x] = aircolor;
-        for (; y < BOX_SIZE; y++)
-            bm.bubblebuf[y * BOX_SIZE + x] = watercolor;
+        int water_y = REALY(bm.waterlevels[x]);
+        unsigned char *col_ptr = &bm.bubblebuf[x];
+        for (y = 0; y < water_y; y++) {
+            *col_ptr = aircolor;
+            col_ptr += BOX_SIZE;
+        }
+        for (; y < BOX_SIZE; y++) {
+            *col_ptr = watercolor;
+            col_ptr += BOX_SIZE;
+        }
     }
 
     for (i = 0; i < bm.n_bubbles; i++) {
-        bubblebuf_ptr = &(bm.bubblebuf[(((REALY(bm.bubbles[i].y) - 1) * BOX_SIZE) + BOX_SIZE) + bm.bubbles[i].x - 1]);
-        if (bubblebuf_ptr[0] < aircolor)
-            bubblebuf_ptr[0]++;
-        bubblebuf_ptr[1] = aircolor;
-        if (bubblebuf_ptr[2] < aircolor)
-            bubblebuf_ptr[2]++;
-        bubblebuf_ptr += BOX_SIZE;
+        int bx = bm.bubbles[i].x;
+        int by = REALY(bm.bubbles[i].y);
+        bubblebuf_ptr = &bm.bubblebuf[by * BOX_SIZE + bx];
 
-        bubblebuf_ptr[0] = aircolor;
-        bubblebuf_ptr[1] = aircolor;
-        bubblebuf_ptr[2] = aircolor;
-        bubblebuf_ptr += BOX_SIZE;
+        /* Draw 3x3 bubble centered at (bx, by) */
+        /* Row by-1 */
+        unsigned char *row_ptr = bubblebuf_ptr - BOX_SIZE;
+        if (row_ptr[-1] < aircolor) row_ptr[-1]++;
+        row_ptr[0] = aircolor;
+        if (row_ptr[1] < aircolor) row_ptr[1]++;
 
-        if (bm.bubbles[i].y < MAKEY(BOX_SIZE-1)) {
-            if (bubblebuf_ptr[0] < aircolor)
-                bubblebuf_ptr[0]++;
-            bubblebuf_ptr[1] = aircolor;
-            if (bubblebuf_ptr[2] < aircolor)
-                bubblebuf_ptr[2]++;
+        /* Row by */
+        row_ptr = bubblebuf_ptr;
+        row_ptr[-1] = aircolor;
+        row_ptr[0] = aircolor;
+        row_ptr[1] = aircolor;
+
+        /* Row by+1 */
+        if (by < BOX_SIZE - 1) {
+            row_ptr = bubblebuf_ptr + BOX_SIZE;
+            if (row_ptr[-1] < aircolor) row_ptr[-1]++;
+            row_ptr[0] = aircolor;
+            if (row_ptr[1] < aircolor) row_ptr[1]++;
         }
     }
 }
 
 
 void bubblebuf_colorspace(void) {
-    unsigned char reds[3], grns[3], blus[3];
-    unsigned char * bubblebuf_ptr, * rgbbuf_ptr;
-    int count, bubblebuf_val;
+    uint32_t palette[3];
+    int count;
 
-    reds[watercolor] =
-        (GET_RED(bm.liquid_maxswap) * bm.swap_percent +
-         GET_RED(bm.liquid_noswap) * (100 - bm.swap_percent)) / 100;
-    reds[aircolor] =
-        (GET_RED(bm.air_maxswap) * bm.swap_percent +
-         GET_RED(bm.air_noswap) * (100 - bm.swap_percent)) / 100;
-    reds[antialiascolor] = ((int)reds[watercolor] + reds[aircolor])/2;
+    palette[watercolor] =
+        (((GET_RED(bm.liquid_maxswap) * bm.swap_percent +
+           GET_RED(bm.liquid_noswap) * (100 - bm.swap_percent)) / 100) << 16) |
+        (((GET_GRN(bm.liquid_maxswap) * bm.swap_percent +
+           GET_GRN(bm.liquid_noswap) * (100 - bm.swap_percent)) / 100) << 8) |
+        ((GET_BLU(bm.liquid_maxswap) * bm.swap_percent +
+          GET_BLU(bm.liquid_noswap) * (100 - bm.swap_percent)) / 100);
 
-    grns[watercolor] =
-        (GET_GRN(bm.liquid_maxswap) * bm.swap_percent +
-         GET_GRN(bm.liquid_noswap) * (100 - bm.swap_percent)) / 100;
-    grns[aircolor] =
-        (GET_GRN(bm.air_maxswap) * bm.swap_percent +
-         GET_GRN(bm.air_noswap) * (100 - bm.swap_percent)) / 100;
-    grns[antialiascolor] = ((int)grns[watercolor] + grns[aircolor])/2;
+    palette[aircolor] =
+        (((GET_RED(bm.air_maxswap) * bm.swap_percent +
+           GET_RED(bm.air_noswap) * (100 - bm.swap_percent)) / 100) << 16) |
+        (((GET_GRN(bm.air_maxswap) * bm.swap_percent +
+           GET_GRN(bm.air_noswap) * (100 - bm.swap_percent)) / 100) << 8) |
+        ((GET_BLU(bm.air_maxswap) * bm.swap_percent +
+          GET_BLU(bm.air_noswap) * (100 - bm.swap_percent)) / 100);
 
-    blus[watercolor] =
-        (GET_BLU(bm.liquid_maxswap) * bm.swap_percent +
-         GET_BLU(bm.liquid_noswap) * (100 - bm.swap_percent)) / 100;
-    blus[aircolor] =
-        (GET_BLU(bm.air_maxswap) * bm.swap_percent +
-         GET_BLU(bm.air_noswap) * (100 - bm.swap_percent)) / 100;
-    blus[antialiascolor] = ((int)blus[watercolor] + blus[aircolor])/2;
+    palette[antialiascolor] =
+        ((((palette[watercolor] >> 16) & 255) + ((palette[aircolor] >> 16) & 255)) / 2 << 16) |
+        ((((palette[watercolor] >> 8) & 255) + ((palette[aircolor] >> 8) & 255)) / 2 << 8) |
+        (((palette[watercolor] & 255) + (palette[aircolor] & 255)) / 2);
 
-    for (count = BOX_SIZE*BOX_SIZE, rgbbuf_ptr = bm.rgb_buf, bubblebuf_ptr = bm.bubblebuf;
-         count; count--) {
-        bubblebuf_val = *bubblebuf_ptr++;
-        *rgbbuf_ptr++ = reds[bubblebuf_val];
-        *rgbbuf_ptr++ = grns[bubblebuf_val];
-        *rgbbuf_ptr++ = blus[bubblebuf_val];
+    for (count = 0; count < BOX_SIZE * BOX_SIZE; count++) {
+        bm.rgb_buf[count] = palette[bm.bubblebuf[count]];
     }
 }
 
@@ -765,18 +754,20 @@ void draw_from_xpm(char **xpm, unsigned char *whither, unsigned int targetw,
     }
 }
 
-void draw_digit(unsigned char * from, unsigned char * whither) {
-    int yy;
+void draw_digit(unsigned char *from, uint32_t *whither) {
+    int yy, xx;
     for (yy = 0; yy < 8; yy++) {
-        memcpy(whither, from, 12);
+        for (xx = 0; xx < 4; xx++) {
+            whither[xx] = (from[xx*3] << 16) | (from[xx*3+1] << 8) | from[xx*3+2];
+        }
         from += 12;
-        whither += 3*BOX_SIZE;
+        whither += BOX_SIZE;
     }
 }
 
 void draw_string(char *string, int x, int y, int color) {
     unsigned char c;
-    unsigned char * graph_numbers = graph_numbers_n_rgb;
+    unsigned char *graph_numbers = graph_numbers_n_rgb;
 
     if (color) graph_numbers = graph_numbers_b_rgb;
 
@@ -787,17 +778,16 @@ void draw_string(char *string, int x, int y, int color) {
 
         if (c <= 11)
             draw_digit(&graph_numbers[3*4*9*c],
-                       &bm.mem_buf[3*(y*BOX_SIZE+x)]);
+                       &bm.mem_buf[y*BOX_SIZE+x]);
         x += 4;
     }
 }
 
-void draw_history(int num, int size, unsigned int *history, unsigned char *buf) {
+void draw_history(int num, int size, unsigned int *history, uint32_t *buf) {
     int pixels_per_byte;
     int yy, xx;
     int height;
-    unsigned char mr,mg,mb, br,bg,bb;
-    unsigned char * graphptr;
+    uint32_t max_color, bar_color, hundreds_color;
 
     pixels_per_byte = 100;
 
@@ -806,37 +796,26 @@ void draw_history(int num, int size, unsigned int *history, unsigned char *buf) 
             pixels_per_byte += 100;
     }
 
-    mr = GET_RED(graph_max);
-    mg = GET_GRN(graph_max);
-    mb = GET_BLU(graph_max);
-
-    br = GET_RED(graph_bar);
-    bg = GET_GRN(graph_bar);
-    bb = GET_BLU(graph_bar);
+    max_color = graph_max;
+    bar_color = graph_bar;
+    hundreds_color = graph_hundreds;
 
     for (xx = 0; xx < num; xx++) {
         height = size - size * history[xx] / pixels_per_byte;
 
-        for (yy = height, graphptr = &buf[(height*BOX_SIZE+xx+2)*3];
-             yy < height+2 && yy < size;
-             yy++, graphptr += 3*BOX_SIZE) {
-            graphptr[0] = mr; graphptr[1] = mg; graphptr[2] = mb;
+        for (yy = height; yy < height+2 && yy < size; yy++) {
+            buf[yy*BOX_SIZE+xx+2] = max_color;
         }
 
-        for (;yy < size; yy++, graphptr += 3*BOX_SIZE) {
-            graphptr[0] = br; graphptr[1] = bg; graphptr[2] = bb;
+        for (;yy < size; yy++) {
+            buf[yy*BOX_SIZE+xx+2] = bar_color;
         }
     }
 
-    br = GET_RED(graph_hundreds);
-    bg = GET_GRN(graph_hundreds);
-    bb = GET_BLU(graph_hundreds);
-
     for (yy = pixels_per_byte - 100; yy > 0; yy -= 100) {
         height = size - size * yy / pixels_per_byte;
-        graphptr = &buf[(height*BOX_SIZE+2)*3];
-        for (xx = 0; xx < num; xx++, graphptr += 3) {
-            graphptr[0] = br; graphptr[1] = bg; graphptr[2] = bb;
+        for (xx = 0; xx < num; xx++) {
+            buf[height*BOX_SIZE+xx+2] = hundreds_color;
         }
     }
 }
@@ -845,9 +824,11 @@ void render_secondary(void) {
     char percent[4];
     char number[8];
     int i;
+    unsigned char *src = bm.screen_type ? empty_loadgraph : empty_memgraph;
 
-    memcpy(bm.mem_buf, bm.screen_type ? empty_loadgraph : empty_memgraph,
-           BOX_SIZE * BOX_SIZE * 3);
+    for (i = 0; i < BOX_SIZE * BOX_SIZE; i++) {
+        bm.mem_buf[i] = (src[i*3] << 16) | (src[i*3+1] << 8) | src[i*3+2];
+    }
 
     if (bm.screen_type) {
 #if BOX_SIZE >= 55
@@ -858,7 +839,7 @@ void render_secondary(void) {
             draw_string(number, ((BOX_SIZE-1)/2-27) + 19*i + 10, 9, 0);
         }
 #endif
-        draw_history(BOX_SIZE-4, BOX_SIZE-4-21, bm.history, &bm.mem_buf[21*BOX_SIZE*3]);
+        draw_history(BOX_SIZE-4, BOX_SIZE-4-21, bm.history, &bm.mem_buf[21*BOX_SIZE]);
     } else {
         if (memscreen_megabytes || bm.mem_used > (999999<<10))
             snprintf(number, 8, "%6"PRIu64"M", bm.mem_used >> 20);
@@ -876,7 +857,7 @@ void render_secondary(void) {
         draw_string(number, 3, 11, (bm.swap_percent > 90) ? 1 : 0);
         draw_string(percent, 39, 11, (bm.swap_percent > 90) ? 1 : 0);
 
-        draw_history(BOX_SIZE-4, BOX_SIZE-4-19, bm.memhist, &bm.mem_buf[19*BOX_SIZE*3]);
+        draw_history(BOX_SIZE-4, BOX_SIZE-4-19, bm.memhist, &bm.mem_buf[19*BOX_SIZE]);
     }
 }
 
@@ -892,9 +873,16 @@ void roll_history(void)  {
 
 void draw_cpudigit(int what, unsigned char *whither) {
     unsigned int y;
-    unsigned char *from = digits + what * 3 * 6;;
+    unsigned char *from = digits + what * 3 * 6;
     for (y = 0; y < 9; y++) {
-        memcpy(whither,from,21);
+        uint32_t *w = (uint32_t *)whither;
+        uint32_t *f = (uint32_t *)from;
+        w[0] = f[0];
+        w[1] = f[1];
+        w[2] = f[2];
+        w[3] = f[3];
+        w[4] = f[4];
+        whither[20] = from[20];
         whither += 3*25;
         from += 3*95;
     }
@@ -913,43 +901,50 @@ void draw_cpugauge(int cpu) {
     draw_cpudigit(10, &cpu_gauge[3*18]);
 }
 
-void draw_dtchr(const char letter, unsigned char * rgbbuf) {
+void draw_dtchr(const char letter, uint32_t *rgbbuf) {
     int x,y;
-    unsigned char * attenuator;
     char * xpm_line;
 
     for (y=0;y<8;y++) {
         xpm_line = datefont_xpm[((unsigned char)letter-32)*8+y+datefont_offset];
-        for (x=0,attenuator=&rgbbuf[y*BOX_SIZE*3];x<datefont_widths[(unsigned char)letter]-1;x++)
-            if (xpm_line[x] == datefont_transparent) {
-                attenuator += 3;
-            } else {
-                *(attenuator++)>>=1; *(attenuator++)>>=1; *(attenuator++)>>=1;
+        for (x=0;x<datefont_widths[(unsigned char)letter]-1;x++)
+            if (xpm_line[x] != datefont_transparent) {
+                uint32_t pixel = rgbbuf[y*BOX_SIZE+x];
+                int r = GET_RED(pixel) >> 1;
+                int g = GET_GRN(pixel) >> 1;
+                int b = GET_BLU(pixel) >> 1;
+                rgbbuf[y*BOX_SIZE+x] = (r << 16) | (g << 8) | b;
             }
     }
 }
 
-void draw_largedigit(char number, unsigned char * rgbbuf) {
+void draw_largedigit(char number, uint32_t *rgbbuf) {
     int x,y;
-    int t,v;
-    unsigned char * from, * to;
+    int v;
+    unsigned char *from;
 
     if (number>='0' && number<='9') number-='0';
     if (number>=0 && number<=9) {
-        for (y=0;y<32;y++)
-            for (x=0,from=&bigdigits[number*13+y*130],to=&rgbbuf[y*BOX_SIZE*3];x<13;x++) {
-                v=*from++>>2;
-                t=*to+v; *(to++)=(t>255)?255:t;
-                t=*to+v; *(to++)=(t>255)?255:t;
-                t=*to+v; *(to++)=(t>255)?255:t;
+        for (y=0;y<32;y++) {
+            from=&bigdigits[number*13+y*130];
+            for (x=0;x<13;x++) {
+                uint32_t pixel = rgbbuf[y*BOX_SIZE+x];
+                v=from[x]>>2;
+                int r = GET_RED(pixel) + v; if (r > 255) r = 255;
+                int g = GET_GRN(pixel) + v; if (g > 255) g = 255;
+                int b = GET_BLU(pixel) + v; if (b > 255) b = 255;
+                rgbbuf[y*BOX_SIZE+x] = (r << 16) | (g << 8) | b;
             }
+        }
     }
 }
 
-void draw_rgba_pixel(unsigned char * whither, int color, float opacity) {
-    whither[0] = (opacity*GET_RED(color) + (1-opacity)*whither[0]);
-    whither[1] = (opacity*GET_GRN(color) + (1-opacity)*whither[1]);
-    whither[2] = (opacity*GET_BLU(color) + (1-opacity)*whither[2]);
+void draw_rgba_pixel(uint32_t *whither, int color, float opacity) {
+    uint32_t pixel = *whither;
+    int r = (int)(opacity * GET_RED(color) + (1 - opacity) * GET_RED(pixel));
+    int g = (int)(opacity * GET_GRN(color) + (1 - opacity) * GET_GRN(pixel));
+    int b = (int)(opacity * GET_BLU(color) + (1 - opacity) * GET_BLU(pixel));
+    *whither = (r << 16) | (g << 8) | b;
 }
 
 float fpart(float in) { return in - floor(in); }
@@ -974,8 +969,8 @@ void draw_aa_line(float x1,float y1, float x2,float y2, int color) {
 
         x1pxl = xend;
         y1pxl = floor(yend);
-        draw_rgba_pixel(&bm.rgb_buf[(x1pxl+BOX_SIZE*(y1pxl  ))*3], color, (1-fpart(yend)) * xgap );
-        draw_rgba_pixel(&bm.rgb_buf[(x1pxl+BOX_SIZE*(y1pxl+1))*3], color, fpart(yend) * xgap);
+        draw_rgba_pixel(&bm.rgb_buf[x1pxl+BOX_SIZE*(y1pxl  )], color, (1-fpart(yend)) * xgap );
+        draw_rgba_pixel(&bm.rgb_buf[x1pxl+BOX_SIZE*(y1pxl+1)], color, fpart(yend) * xgap);
         intery = yend + gradient;
 
         xend = floor(x2+.5);
@@ -983,12 +978,12 @@ void draw_aa_line(float x1,float y1, float x2,float y2, int color) {
         xgap = fpart(x2 + 0.5);
         x2pxl = xend;
         y2pxl = floor(yend);
-        draw_rgba_pixel(&bm.rgb_buf[(x2pxl+BOX_SIZE*(y2pxl  ))*3], color, (1-fpart(yend)) * xgap );
-        draw_rgba_pixel(&bm.rgb_buf[(x2pxl+BOX_SIZE*(y2pxl+1))*3], color, fpart(yend) * xgap);
+        draw_rgba_pixel(&bm.rgb_buf[x2pxl+BOX_SIZE*(y2pxl  )], color, (1-fpart(yend)) * xgap );
+        draw_rgba_pixel(&bm.rgb_buf[x2pxl+BOX_SIZE*(y2pxl+1)], color, fpart(yend) * xgap);
 
         for(xx = x1pxl + 1; xx <= x2pxl - 1; xx++) {
-            draw_rgba_pixel(&bm.rgb_buf[(xx+BOX_SIZE*(int)(intery))*3], color, 1-fpart (intery) );
-            draw_rgba_pixel(&bm.rgb_buf[(xx+BOX_SIZE*(int)(intery+1))*3], color, fpart (intery) );
+            draw_rgba_pixel(&bm.rgb_buf[xx+BOX_SIZE*(int)(intery)], color, 1-fpart (intery) );
+            draw_rgba_pixel(&bm.rgb_buf[xx+BOX_SIZE*(int)(intery+1)], color, fpart (intery) );
             intery = intery + gradient;
         }
     } else {
@@ -1004,8 +999,8 @@ void draw_aa_line(float x1,float y1, float x2,float y2, int color) {
 
         y1pxl = yend;
         x1pxl = floor(xend);
-        draw_rgba_pixel(&bm.rgb_buf[(  x1pxl+BOX_SIZE*y1pxl)*3], color, (1-fpart(xend)) * ygap );
-        draw_rgba_pixel(&bm.rgb_buf[(1+x1pxl+BOX_SIZE*y1pxl)*3], color, fpart(xend) * ygap);
+        draw_rgba_pixel(&bm.rgb_buf[  x1pxl+BOX_SIZE*y1pxl], color, (1-fpart(xend)) * ygap );
+        draw_rgba_pixel(&bm.rgb_buf[1+x1pxl+BOX_SIZE*y1pxl], color, fpart(xend) * ygap);
         interx = xend + gradient;
 
         yend = floor(y2+.5);
@@ -1013,12 +1008,12 @@ void draw_aa_line(float x1,float y1, float x2,float y2, int color) {
         ygap = fpart(y2 + 0.5);
         y2pxl = yend;
         x2pxl = floor(xend);
-        draw_rgba_pixel(&bm.rgb_buf[(  x2pxl+BOX_SIZE*y2pxl)*3], color, (1-fpart(xend)) * ygap );
-        draw_rgba_pixel(&bm.rgb_buf[(1+x2pxl+BOX_SIZE*y2pxl)*3], color, fpart(xend) * ygap);
+        draw_rgba_pixel(&bm.rgb_buf[  x2pxl+BOX_SIZE*y2pxl], color, (1-fpart(xend)) * ygap );
+        draw_rgba_pixel(&bm.rgb_buf[1+x2pxl+BOX_SIZE*y2pxl], color, fpart(xend) * ygap);
 
         for(yy = y1pxl + 1; yy <= y2pxl - 1; yy++) {
-            draw_rgba_pixel(&bm.rgb_buf[(  (int)interx+BOX_SIZE*yy)*3], color, 1-fpart (interx) );
-            draw_rgba_pixel(&bm.rgb_buf[(1+(int)interx+BOX_SIZE*yy)*3], color, fpart (interx) );
+            draw_rgba_pixel(&bm.rgb_buf[  (int)interx+BOX_SIZE*yy], color, 1-fpart (interx) );
+            draw_rgba_pixel(&bm.rgb_buf[1+(int)interx+BOX_SIZE*yy], color, fpart (interx) );
             interx = interx + gradient;
         }
     }
@@ -1058,7 +1053,7 @@ void alpha_date(struct tm * mytime) {
     const char *roman[]={"I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII"};
     char format[32];
     int ii, width;
-    unsigned char * rgbptr;
+    uint32_t *rgbptr;
 
     if (strftime(format,32,"%a %b %d",mytime) != 0) {
         for (width = ii = 0; ii < (int)strlen(format); ii++)
@@ -1074,24 +1069,24 @@ void alpha_date(struct tm * mytime) {
             width += datefont_widths[(unsigned char)format[ii]];
     }
 
-    rgbptr = &bm.rgb_buf[3*(2*BOX_SIZE+(BOX_SIZE-width)/2)];
+    rgbptr = &bm.rgb_buf[2*BOX_SIZE+(BOX_SIZE-width)/2];
 
     for (ii = 0; ii < (int)strlen(format); ii++) {
         draw_dtchr(format[ii],rgbptr);
-        rgbptr += 3*datefont_widths[(unsigned char)format[ii]];
+        rgbptr += datefont_widths[(unsigned char)format[ii]];
     }
 }
 
 void alpha_digitalclock(struct tm * mytime) {
 #if BOX_SIZE >= 54
     draw_largedigit(mytime->tm_hour/10,
-                    &bm.rgb_buf[3*((BOX_SIZE/2)-26+BOX_SIZE*(BOX_SIZE/2-16))]);
+                    &bm.rgb_buf[(BOX_SIZE/2)-26+BOX_SIZE*(BOX_SIZE/2-16)]);
     draw_largedigit(mytime->tm_hour%10,
-                    &bm.rgb_buf[3*((BOX_SIZE/2)-13+BOX_SIZE*(BOX_SIZE/2-16))]);
+                    &bm.rgb_buf[(BOX_SIZE/2)-13+BOX_SIZE*(BOX_SIZE/2-16)]);
     draw_largedigit(mytime->tm_min/10,
-                    &bm.rgb_buf[3*((BOX_SIZE/2)   +BOX_SIZE*(BOX_SIZE/2-16))]);
+                    &bm.rgb_buf[(BOX_SIZE/2)   +BOX_SIZE*(BOX_SIZE/2-16)]);
     draw_largedigit(mytime->tm_min%10,
-                    &bm.rgb_buf[3*((BOX_SIZE/2)+13+BOX_SIZE*(BOX_SIZE/2-16))]);
+                    &bm.rgb_buf[(BOX_SIZE/2)+13+BOX_SIZE*(BOX_SIZE/2-16)]);
 #endif
 }
 
@@ -1137,28 +1132,31 @@ void calculate_transparencies(int proximity) {
 
 
 void alpha_cpu(void) {
-    unsigned char * gaugeptr, *rgbptr;
-    int y, bob;
+    unsigned char *gaugeptr;
+    int y, x;
     gaugeptr = cpu_gauge;
     for (y = 0; y < 9; y++) {
-        rgbptr = &bm.rgb_buf[((y + (BOX_SIZE-10)) * BOX_SIZE + (BOX_SIZE/2-12))*3];
-        bob = 75;
-        while (bob--) {
-            *rgbptr = (gauge_alpha * *rgbptr + (256 - gauge_alpha) * *gaugeptr++) >> 8;
-            rgbptr++;
+        uint32_t *rgbptr = &bm.rgb_buf[(y + (BOX_SIZE-10)) * BOX_SIZE + (BOX_SIZE/2-12)];
+        for (x = 0; x < 25; x++) {
+            uint32_t pixel = rgbptr[x];
+            int r = (gauge_alpha * GET_RED(pixel) + (256 - gauge_alpha) * gaugeptr[0]) >> 8;
+            int g = (gauge_alpha * GET_GRN(pixel) + (256 - gauge_alpha) * gaugeptr[1]) >> 8;
+            int b = (gauge_alpha * GET_BLU(pixel) + (256 - gauge_alpha) * gaugeptr[2]) >> 8;
+            rgbptr[x] = (r << 16) | (g << 8) | b;
+            gaugeptr += 3;
         }
     }
 }
 
 void alpha_graph(void) {
-    unsigned char *graphptr, *rgbptr;
-    int bob;
-    graphptr = bm.mem_buf;
-    rgbptr = bm.rgb_buf;
-    bob = BOX_SIZE * BOX_SIZE * 3;
-    while (bob--) {
-        *rgbptr = (graph_alpha * *rgbptr + (256 - graph_alpha) * *graphptr++) >> 8;
-        rgbptr++;
+    int count;
+    for (count = 0; count < BOX_SIZE * BOX_SIZE; count++) {
+        uint32_t rgb_pixel = bm.rgb_buf[count];
+        uint32_t mem_pixel = bm.mem_buf[count];
+        int r = (graph_alpha * GET_RED(rgb_pixel) + (256 - graph_alpha) * GET_RED(mem_pixel)) >> 8;
+        int g = (graph_alpha * GET_GRN(rgb_pixel) + (256 - graph_alpha) * GET_GRN(mem_pixel)) >> 8;
+        int b = (graph_alpha * GET_BLU(rgb_pixel) + (256 - graph_alpha) * GET_BLU(mem_pixel)) >> 8;
+        bm.rgb_buf[count] = (r << 16) | (g << 8) | b;
     }
 }
 
@@ -1186,32 +1184,25 @@ void draw_duck(int x, int y, int frame_no, int flipx, int flipy) {
             duck_colors[1] = 0x808080 ^ duck_colors[1];
         duck_blink--;
     }
+
     for (yy = duck_top; yy < duck_bottom; yy++) {
         int ypos = (yy + y) * BOX_SIZE;
         real_y = (flipy && upside_down_duck_enabled) ? 16 - yy : yy;
+        int *duck_row = &duck_data[frame_no][real_y * 18];
         for (xx = duck_left; xx < duck_right; xx++) {
             real_x = flipx ? 17 - xx : xx;
-            if ((cmap = duck_data[frame_no][real_y * 18 + real_x]) != 0) {
-                unsigned char r, g, b;
-                pos = (ypos + xx + x) * 3;
-
-                r = GET_RED(duck_colors[cmap]);
-                g = GET_GRN(duck_colors[cmap]);
-                b = GET_BLU(duck_colors[cmap]);
+            if ((cmap = duck_row[real_x]) != 0) {
+                uint32_t duck_color = duck_colors[cmap];
+                pos = ypos + xx + x;
 
                 if (yy + y < REALY(bm.waterlevels[xx + x])) {
-                    bm.rgb_buf[pos++] = r;
-                    bm.rgb_buf[pos++] = g;
-                    bm.rgb_buf[pos] = b;
+                    bm.rgb_buf[pos] = duck_color;
                 } else {
-                    bm.rgb_buf[pos] = (DUCKBLEND * (int) bm.rgb_buf[pos]
-                                       + (256 - DUCKBLEND) * (int) r) >> 8;
-                    bm.rgb_buf[pos + 1] =
-                        (DUCKBLEND * (int) bm.rgb_buf[pos + 1]
-                         + (256 - DUCKBLEND) * (int) g) >> 8;
-                    bm.rgb_buf[pos + 2] =
-                        (DUCKBLEND * (int) bm.rgb_buf[pos + 2]
-                         + (256 - DUCKBLEND) * (int) b) >> 8;
+                    uint32_t pixel = bm.rgb_buf[pos];
+                    int r = (DUCKBLEND * GET_RED(pixel) + (256 - DUCKBLEND) * GET_RED(duck_color)) >> 8;
+                    int g = (DUCKBLEND * GET_GRN(pixel) + (256 - DUCKBLEND) * GET_GRN(duck_color)) >> 8;
+                    int b = (DUCKBLEND * GET_BLU(pixel) + (256 - DUCKBLEND) * GET_BLU(duck_color)) >> 8;
+                    bm.rgb_buf[pos] = (r << 16) | (g << 8) | b;
                 }
             }
         }

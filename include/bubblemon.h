@@ -55,26 +55,34 @@ typedef struct {
 } LoadAvg;
 
 typedef struct {
-    unsigned char rgb_buf[BOX_SIZE * BOX_SIZE * 3 + 1];
-
-    unsigned char mem_buf[BOX_SIZE * BOX_SIZE * 3 + 1];
-
-    int screen_type;
-    int picture_lock;
-
-    int samples;
-    unsigned char bubblebuf[BOX_SIZE * (BOX_SIZE+4)];
-
-    int waterlevels[BOX_SIZE];
-    int waterlevels_dy[BOX_SIZE];
+    /* Hot simulation data - grouped for cache locality */
+    int waterlevels[BOX_SIZE] __attribute__((aligned(64)));
+    int waterlevels_dy[BOX_SIZE] __attribute__((aligned(64)));
     Bubble *bubbles;
     int n_bubbles;
 
-    int air_noswap, liquid_noswap, air_maxswap, liquid_maxswap;
+    /* Hot rendering data - aligned to cache lines, using XRGB format */
+    unsigned char bubblebuf[BOX_SIZE * (BOX_SIZE + 4)] __attribute__((aligned(64)));
+    uint32_t rgb_buf[BOX_SIZE * BOX_SIZE] __attribute__((aligned(64)));
+    uint32_t mem_buf[BOX_SIZE * BOX_SIZE] __attribute__((aligned(64)));
 
+    /* Frequently accessed stats */
+    unsigned int mem_percent;
+    unsigned int swap_percent;
+    u_int64_t mem_used;
+    u_int64_t mem_max;
+    u_int64_t swap_used;
+    u_int64_t swap_max;
+
+    /* Configuration and less frequent state */
+    int screen_type;
+    int picture_lock;
+    int samples;
     int loadIndex;
     u_int64_t *load, *total;
 
+    /* Simulation constants */
+    int air_noswap, liquid_noswap, air_maxswap, liquid_maxswap;
     int maxbubbles;
     double ripples;
     double gravity;
@@ -88,17 +96,11 @@ typedef struct {
     int viscosity_int;
     int speed_limit_int;
 
-    u_int64_t mem_used;
-    u_int64_t mem_max;
-    u_int64_t swap_used;
-    u_int64_t swap_max;
-    unsigned int swap_percent;
-    unsigned int mem_percent;
-    unsigned int memhist[BOX_SIZE-3];
+    /* History and display data */
+    unsigned int memhist[BOX_SIZE - 3] __attribute__((aligned(64)));
     unsigned int memadd;
-
     LoadAvg loadavg[3];
-    unsigned int history[BOX_SIZE-3];
+    unsigned int history[BOX_SIZE - 3] __attribute__((aligned(64)));
     unsigned int hisadd;
 } BubbleMonData;
 #endif
