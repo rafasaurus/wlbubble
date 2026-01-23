@@ -9,7 +9,7 @@ VERSION = $(shell git describe --tags 2>/dev/null || echo "2.0")
 DESTDIR =
 PREFIX = /usr/local
 
-CFLAGS += -std=c99 -Wall -O3 -D_POSIX_C_SOURCE=200809L
+CFLAGS += -std=c99 -Wall -O3 -march=native -D_POSIX_C_SOURCE=200809L
 SHELL = sh
 OS = $(shell uname -s)
 CC = gcc
